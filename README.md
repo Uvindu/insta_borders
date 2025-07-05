@@ -14,6 +14,8 @@ Adjustable settings -
 
 if you do not want to add watermark just dont provide second file path.  
 
+Required package - Pillow  
+
 To run -   
 $ python3 img_border_with_watermark.py "/path/to/image/folder" "/path/to/watermark/image" --delete-originals  
 
