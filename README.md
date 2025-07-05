@@ -1,4 +1,4 @@
-# Image Border and Watermark Processor
+# Image Border and Watermark
 
 A versatile Python script to batch-process images in a folder. This tool can add borders to make images square, apply a watermark, and preserve all original metadata, ensuring no loss of quality.
 
