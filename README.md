@@ -1,6 +1,7 @@
 # Image Border and Watermark
 
-A versatile Python script to batch-process images in a folder. This tool can add borders to make images square, apply a watermark, and preserve all original metadata, ensuring no loss of quality.
+A versatile Python script to batch-process images in a folder. This tool can add borders to make images square, apply a watermark, and preserve all original metadata, ensuring no loss of quality.  
+[Gemini build chat](https://g.co/gemini/share/06dea20dbeec)
 
 ## Features
 
