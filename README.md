@@ -1,4 +1,4 @@
-# Image borders and watermark
+# Image Border and Watermark Processor
 
 A versatile Python script to batch-process images in a folder. This tool can add borders to make images square, apply a watermark, and preserve all original metadata, ensuring no loss of quality.
 
@@ -12,6 +12,15 @@ A versatile Python script to batch-process images in a folder. This tool can add
 - **Cross-Platform Path Handling**: Automatically handles Windows-style paths even when run from a Linux-like terminal (e.g., WSL, Git Bash).
 
 ---
+
+## Results
+
+### original image -      
+![image alt](https://github.com/Uvindu/insta_borders/blob/e243f2022977c2c8ffff3eb57f4b16f0baba6529/test.jpg)
+
+### processed image -     
+![image alt](https://github.com/Uvindu/insta_borders/blob/e243f2022977c2c8ffff3eb57f4b16f0baba6529/test_1x1.jpg)
+
 
 ## Requirements
 
@@ -37,12 +46,61 @@ The script is run from the command line. The basic structure is:
 
 ```bash
 python process_images.py "/path/to/image/folder" ["/path/to/watermark.png"] [--delete-originals]
-Important: Always enclose file paths in double quotes (") if they contain spaces.Examples1. Add Borders OnlyThis is the simplest use case. It will create new _1x1.jpg files in the same folder.python process_images.py "C:\Users\YourUser\Pictures\Vacation Photos"
-2. Add Borders and a WatermarkProvide the path to your watermark image as the second argument.python process_images.py "C:\Users\YourUser\Pictures\Vacation Photos" "C:\Users\YourUser\Documents\my_logo.png"
-3. Add Borders and Delete OriginalsUse the --delete-originals flag to remove the source files after processing. Use this with caution!python process_images.py "C:\Users\YourUser\Pictures\Vacation Photos" --delete-originals
-4. Add Borders, Watermark, and Delete OriginalsCombine the watermark path and the delete flag. The order of the flag does not matter.python process_images.py "C:\Users\YourUser\Pictures\Vacation Photos" "C:\Users\YourUser\Documents\my_logo.png" --delete-originals
-orpython process_images.py --delete-originals "C:\Users\YourUser\Pictures\Vacation Photos" "C:\Users\YourUser\Documents\my_logo.png"
-CustomizationYou can easily change the script's behavior by editing the variables in the # --- ADJUSTABLE SETTINGS --- section at the bottom of the script file.size_ratio: A float that determines the watermark's width relative to the image's width. 0.15 means 15%.opacity: A float from 0.0 (fully transparent) to 1.0 (fully opaque) for the watermark.color_for_borders: The color of the added borders. Can be a name ('white') or hex code ('#FFFFFF').jpeg_quality: An integer from 1 to 100 that controls the quality of saved JPEGs. 95 is recommended for high quality.# --- ADJUSTABLE SETTINGS ---
+```
+
+**Important:** Always enclose file paths in double quotes (`"`) if they contain spaces.
+
+### Examples
+
+#### 1. Add Borders Only
+
+This is the simplest use case. It will create new `_1x1.jpg` files in the same folder.
+
+```bash
+python process_images.py "C:\Users\YourUser\Pictures\Vacation Photos"
+```
+
+#### 2. Add Borders and a Watermark
+
+Provide the path to your watermark image as the second argument.
+
+```bash
+python process_images.py "C:\Users\YourUser\Pictures\Vacation Photos" "C:\Users\YourUser\Documents\my_logo.png"
+```
+
+#### 3. Add Borders and Delete Originals
+
+Use the `--delete-originals` flag to remove the source files after processing. **Use this with caution!**
+
+```bash
+python process_images.py "C:\Users\YourUser\Pictures\Vacation Photos" --delete-originals
+```
+
+#### 4. Add Borders, Watermark, and Delete Originals
+
+Combine the watermark path and the delete flag. The order of the flag does not matter.
+
+```bash
+python process_images.py "C:\Users\YourUser\Pictures\Vacation Photos" "C:\Users\YourUser\Documents\my_logo.png" --delete-originals
+```
+or
+```bash
+python process_images.py --delete-originals "C:\Users\YourUser\Pictures\Vacation Photos" "C:\Users\YourUser\Documents\my_logo.png"
+```
+
+---
+
+## Customization
+
+You can easily change the script's behavior by editing the variables in the `# --- ADJUSTABLE SETTINGS ---` section at the bottom of the script file.
+
+-   `size_ratio`: A float that determines the watermark's width relative to the image's width. `0.15` means 15%.
+-   `opacity`: A float from `0.0` (fully transparent) to `1.0` (fully opaque) for the watermark.
+-   `color_for_borders`: The color of the added borders. Can be a name (`'white'`) or hex code (`'#FFFFFF'`).
+-   `jpeg_quality`: An integer from 1 to 100 that controls the quality of saved JPEGs. `95` is recommended for high quality.
+
+```python
+# --- ADJUSTABLE SETTINGS ---
 size_ratio = 0.15
 opacity = 0.6
 color_for_borders = 'white'
