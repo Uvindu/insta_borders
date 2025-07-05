@@ -1,5 +1,6 @@
-I checked in the internet and couldn't find any free/reliable tool to add white borders and watermarks such that the photo will become 1x1 aspect ratio without any changes to the actual image. So I created a python code with Gemini. Might be useful to others, hence posting here.
-# --- ADJUSTABLE SETTINGS ---
+I checked in the internet and couldn't find any free/reliable tool to add white borders and watermarks such that the photo will become 1x1 aspect ratio without any changes to the actual image. So I created a python code with Gemini. Might be useful to others, hence posting here
+
+Adjustable settings - 
     size_ratio = 0.15            #watermark
     opacity = 0.6                #watermark
     color_for_borders = 'white'
