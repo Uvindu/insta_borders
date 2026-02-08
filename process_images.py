@@ -1,122 +1,240 @@
-
+import argparse
+import logging
 import os
+import shutil
 import sys
-from PIL import Image, ImageOps
 import re
+from concurrent.futures import ProcessPoolExecutor, as_completed
+from pathlib import Path
+from typing import Optional, Tuple
 
-def convert_windows_to_linux_path(path_input: str) -> str:
+from PIL import Image, ImageOps
+
+# Configure logging
+logging.basicConfig(level=logging.INFO, format='%(message)s')
+logger = logging.getLogger(__name__)
+
+SUPPORTED_EXTENSIONS = {'.jpg', '.jpeg', '.png', '.bmp', '.gif', '.tiff', '.webp'}
+
+def convert_windows_to_linux_path(path_input: str) -> Path:
     """
-    Converts a Windows-style file path to a Linux-compatible format.
+    Converts a Windows-style file path to a Linux-compatible pathlib.Path object.
+    Useful for WSL environments.
     """
-    if path_input.startswith('/'):
-        return path_input
-    linux_path = path_input.replace('\\', '/')
+    path_str = str(path_input)
+    if path_str.startswith('/'):
+        return Path(path_str)
+    
+    # Replace backslashes
+    linux_path_str = path_str.replace('\\', '/')
+    
+    # Handle drive letters (e.g., C:/ -> /mnt/c/)
     drive_letter_pattern = re.compile(r'^([a-zA-Z]):/')
-    linux_path = drive_letter_pattern.sub(
+    linux_path_str = drive_letter_pattern.sub(
         lambda match: f'/mnt/{match.group(1).lower()}/', 
-        linux_path
+        linux_path_str
     )
-    return linux_path
+    return Path(linux_path_str)
 
-def process_images(input_folder, watermark_path=None, delete_originals=False, watermark_size_ratio=0.15, watermark_opacity=0.6, border_color='white', jpeg_quality=95):
+def get_path(path_str: str) -> Path:
+    """Resolves path, handling potential Windows paths on Linux (WSL)."""
+    if sys.platform != "win32" and (':' in path_str or '\\' in path_str):
+         return convert_windows_to_linux_path(path_str)
+    return Path(path_str)
 
+def process_file(
+    file_path: Path,
+    output_dir: Path,
+    watermark_path: Optional[Path],
+    watermark_config: dict,
+    border_color: str,
+    jpeg_quality: int,
+    delete_original: bool
+) -> str:
     """
-    Processes images in a folder to make them square by adding borders, optionally applies watermark and/or deletes originals.
+    Worker function to process a single image.
     """
-    supported_extensions = ('.jpg', '.jpeg', '.png', '.bmp', '.gif', '.tiff')
+    try:
+        # Skip if it looks like a processed file (simple check to avoid recursion if output is same dir)
+        if "_1x1" in file_path.stem:
+            return f"Skipped (already processed): {file_path.name}"
 
+        with Image.open(file_path) as img:
+            # Preserve metadata
+            metadata = img.info.copy()
+            original_mode = img.mode
+            
+            # 1. Square the image with borders
+            max_dimension = max(img.size)
+            squared_image = ImageOps.pad(
+                img, 
+                (max_dimension, max_dimension), 
+                color=border_color, 
+                centering=(0.5, 0.5)
+            )
+            
+            final_image = squared_image
 
-    watermark_base = None
-    if watermark_path:
-        try:
-            watermark_base = Image.open(watermark_path).convert("RGBA")
-            print(f"Using watermark: {watermark_path}")
-        except FileNotFoundError:
-            print(f"Error: Watermark image not found at '{watermark_path}'")
-            sys.exit(1)
+            # 2. Add Watermark
+            if watermark_path:
+                try:
+                    # We load watermark inside worker to be safe with pickling, 
+                    # though passing a pre-loaded image is faster if shared correctly.
+                    # For simplicity and robustness in MP, we assume I/O overhead is acceptable 
+                    # or OS caches file read. 
+                    # Optimization: In a real heavy loop, we might preload or pass bytes.
+                    # Given the task, reopening the small watermark file is negligible compared to JPEG encoding.
+                    with Image.open(watermark_path) as wm_base:
+                        wm_base = wm_base.convert("RGBA")
+                        
+                        target_layer = squared_image.convert("RGBA")
+                        
+                        # Calculate size
+                        wm_target_width = int(target_layer.width * watermark_config['ratio'])
+                        
+                        # Resize watermark
+                        wm_resized = wm_base.copy()
+                        wm_resized.thumbnail((wm_target_width, wm_target_width), Image.Resampling.LANCZOS)
+                        
+                        # Apply Opacity
+                        opacity = watermark_config['opacity']
+                        if opacity < 1.0:
+                            alpha = wm_resized.getchannel('A')
+                            new_alpha = alpha.point(lambda p: int(p * opacity) if p > 0 else 0)
+                            wm_resized.putalpha(new_alpha)
+                        
+                        # Position (Bottom-Right)
+                        margin = int(target_layer.width * 0.02)
+                        position = (
+                            target_layer.width - wm_resized.width - margin,
+                            target_layer.height - wm_resized.height - margin
+                        )
+                        
+                        target_layer.paste(wm_resized, position, wm_resized)
+                        final_image = target_layer
 
+                except Exception as wm_err:
+                    logger.error(f"Failed to load watermark for {file_path.name}: {wm_err}")
+                    # Continue without watermark if it fails
 
-    if not os.path.isdir(input_folder):
-        print(f"Error: Folder not found at '{input_folder}'")
-        return
-    print(f"Scanning folder: {input_folder}")
-    if delete_originals:
-        print("WARNING: Original files will be deleted after processing.")
+            # 3. Save
+            if final_image.mode != original_mode and original_mode != 'RGBA':
+                 # Convert back if original wasn't RGBA (unless we added alpha via watermark)
+                 # However, JPEGs don't support RGBA.
+                 if file_path.suffix.lower() in ['.jpg', '.jpeg']:
+                     final_image = final_image.convert("RGB")
+                 else:
+                     final_image = final_image.convert(original_mode)
 
+            new_filename = f"{file_path.stem}_1x1{file_path.suffix}"
+            output_path = output_dir / new_filename
 
-    for filename in os.listdir(input_folder):
-        if filename.lower().endswith(supported_extensions) and "_1x1" not in filename:
+            save_kwargs = metadata
+            if file_path.suffix.lower() in ['.jpg', '.jpeg']:
+                save_kwargs['quality'] = jpeg_quality
+            
+            # Filter incompatible args for save if necessary (usually metadata is fine)
             try:
-                image_path = os.path.join(input_folder, filename)
-                with Image.open(image_path) as img:
-                    metadata = img.info.copy()
-                    original_mode = img.mode
-                    max_dimension = max(img.size)
-                    squared_image = ImageOps.pad(img, (max_dimension, max_dimension), color=border_color, centering=(0.5, 0.5))
-                    final_image = squared_image
-                    if watermark_base:
-                        image_for_watermarking = squared_image
-                        if image_for_watermarking.mode != 'RGBA':
-                            image_for_watermarking = image_for_watermarking.convert('RGBA')
-                        watermark = watermark_base.copy()
-                        wm_target_width = int(image_for_watermarking.width * watermark_size_ratio)
-                        watermark.thumbnail((wm_target_width, wm_target_width), Image.LANCZOS)
-                        if watermark_opacity < 1.0:
-                            alpha = watermark.getchannel('A')
-                            new_alpha = alpha.point(lambda p: int(p * watermark_opacity) if p > 0 else 0)
-                            watermark.putalpha(new_alpha)
-                        margin = int(image_for_watermarking.width * 0.02)
-                        position = (image_for_watermarking.width - watermark.width - margin,
-                                    image_for_watermarking.height - watermark.height - margin)
-                        image_for_watermarking.paste(watermark, position, watermark)
-                        final_image = image_for_watermarking
-                    if final_image.mode != original_mode:
-                        final_image = final_image.convert(original_mode)
-                    name, ext = os.path.splitext(filename)
-                    new_filename = f"{name}_1x1{ext}"
-                    output_path = os.path.join(input_folder, new_filename)
-                    if ext.lower() in ['.jpg', '.jpeg']:
-                        metadata['quality'] = jpeg_quality
-                    final_image.save(output_path, **metadata)
-                    action = "Bordered & Watermarked" if watermark_base else "Bordered"
-                    print(f"Processed '{filename}' -> Saved as '{new_filename}' ({action})")
-                    if delete_originals:
-                        try:
-                            os.remove(image_path)
-                            print(f"  -> Removed original: '{filename}'")
-                        except OSError as e:
-                            print(f"  -> ERROR: Could not remove original '{filename}'. Reason: {e}")
-            except Exception as e:
-                print(f"Could not process file '{filename}'. Reason: {e}")
-    print("\nProcessing complete.")
+                final_image.save(output_path, **save_kwargs)
+            except TypeError:
+                # Fallback if metadata contains unserializable data or bad args
+                final_image.save(output_path, quality=jpeg_quality)
+
+            msg = f"Processed: {file_path.name} -> {output_path.name}"
+
+    except Exception as e:
+        return f"Error processing {file_path.name}: {str(e)}"
+
+    # 4. Delete Original
+    if delete_original:
+        try:
+            file_path.unlink()
+            msg += " (Original deleted)"
+        except OSError as e:
+            msg += f" (Failed to delete original: {e})"
+    
+    return msg
+
+def main():
+    parser = argparse.ArgumentParser(
+        description="Batch process images: Add borders to make square (1x1), optionally watermark, and preserve metadata."
+    )
+    
+    # Path Arguments
+    parser.add_argument("input_dir", help="Directory containing images to process")
+    parser.add_argument("-w", "--watermark", help="Path to watermark image", default=None)
+    parser.add_argument("-o", "--output", help="Output directory (default: same as input)", default=None)
+    
+    # Flags
+    parser.add_argument("--delete-originals", action="store_true", help="Delete original files after processing")
+    
+    # Configuration
+    parser.add_argument("--color", default="white", help="Border color (name or hex, default: white)")
+    parser.add_argument("--opacity", type=float, default=0.6, help="Watermark opacity (0.0 - 1.0, default: 0.6)")
+    parser.add_argument("--ratio", type=float, default=0.15, help="Watermark size ratio relative to image width (default: 0.15)")
+    parser.add_argument("--quality", type=int, default=95, help="JPEG quality (1-100, default: 95)")
+    parser.add_argument("--workers", type=int, default=None, help="Number of parallel workers (default: CPU count)")
+
+    args = parser.parse_args()
+
+    # Setup Paths
+    input_path = get_path(args.input_dir)
+    if not input_path.is_dir():
+        logger.error(f"Error: Input directory '{input_path}' does not exist.")
+        sys.exit(1)
+
+    if args.output:
+        output_path = get_path(args.output)
+        output_path.mkdir(parents=True, exist_ok=True)
+    else:
+        output_path = input_path
+
+    watermark_path = get_path(args.watermark) if args.watermark else None
+    if watermark_path and not watermark_path.exists():
+        logger.error(f"Error: Watermark file '{watermark_path}' not found.")
+        sys.exit(1)
+
+    # Collect Files
+    files_to_process = [
+        p for p in input_path.iterdir() 
+        if p.suffix.lower() in SUPPORTED_EXTENSIONS and "_1x1" not in p.stem
+    ]
+
+    if not files_to_process:
+        logger.info(f"No valid images found in {input_path}")
+        sys.exit(0)
+
+    logger.info(f"Found {len(files_to_process)} images in {input_path}")
+    if args.delete_originals:
+        logger.warning("WARNING: Original files will be deleted after processing.")
+
+    watermark_config = {
+        'ratio': args.ratio,
+        'opacity': args.opacity
+    }
+
+    # Parallel Processing
+    results = []
+    with ProcessPoolExecutor(max_workers=args.workers) as executor:
+        futures = {
+            executor.submit(
+                process_file, 
+                p, 
+                output_path, 
+                watermark_path, 
+                watermark_config, 
+                args.color, 
+                args.quality, 
+                args.delete_originals
+            ): p for p in files_to_process
+        }
+        
+        for future in as_completed(futures):
+            result = future.result()
+            results.append(result)
+            logger.info(result)
+
+    logger.info("\nBatch processing complete.")
 
 if __name__ == "__main__":
-    args = sys.argv[1:]
-    delete_originals_flag = "--delete-originals" in args
-    if delete_originals_flag:
-        args.remove("--delete-originals")
-    if len(args) < 1 or len(args) > 2:
-        print("Usage: python script.py \"/path/to/folder\" [\"/path/to/watermark.png\"] [--delete-originals]")
-        sys.exit(1)
-    folder_to_process = args[0]
-    watermark_file_path = None
-    if len(args) == 2:
-        watermark_file_path = args[1]
-    if sys.platform != "win32":
-        print("Non-Windows OS detected. Converting paths...")
-        folder_to_process = convert_windows_to_linux_path(folder_to_process)
-        if watermark_file_path:
-            watermark_file_path = convert_windows_to_linux_path(watermark_file_path)
-    size_ratio = 0.15
-    opacity = 0.6
-    color_for_borders = 'white'
-    jpeg_quality = 95
-    process_images(
-        input_folder=folder_to_process,
-        watermark_path=watermark_file_path,
-        delete_originals=delete_originals_flag,
-        watermark_size_ratio=size_ratio,
-        watermark_opacity=opacity,
-        border_color=color_for_borders,
-        jpeg_quality=jpeg_quality
-    )
+    main()

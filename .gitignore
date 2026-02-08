@@ -1,0 +1,8 @@
+__pycache__/
+*.pyc
+venv/
+.env
+.DS_Store
+# Ignore processed files if they are in the same directory (optional, but good for git)
+*_1x1.jpg
+*_1x1.png
